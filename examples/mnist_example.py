@@ -18,7 +18,7 @@ def main():
     
     # Define MoE model
     moe_model = MoE(
-        num_experts=3,
+        num_experts=2,
         input_dim=28*28,
         hidden_dim=128,
         output_dim=10
@@ -26,50 +26,50 @@ def main():
     
     # Define MoDE model
     mode_model = MoDE(
-        num_experts=3,
+        num_experts=8,
         input_dim=28*28,
         hidden_dim=128,
         output_dim=10,
-        distillation_temp=2.0,
-        alpha=0.5
+        distillation_temp=0.02,
+        alpha=0.01
     ).to(device)
     
     # Train models
-    print("\nTraining MoE model...")
-    moe_history = train_model(moe_model, train_loader, val_loader, device, epochs=5, lr=0.001)
+    # print("\nTraining MoE model...")
+    # moe_history = train_model(moe_model, train_loader, val_loader, device, epochs=5, lr=0.001)
     
     print("\nTraining MoDE model...")
     mode_history = train_model(mode_model, train_loader, val_loader, device, epochs=5, lr=0.001)
     
-    # Evaluate on test data
-    print("\nEvaluating models on test data...")
-    moe_test_loss, moe_test_acc = evaluate_model(moe_model, test_loader, device)
+    # # Evaluate on test data
+    # print("\nEvaluating models on test data...")
+    # moe_test_loss, moe_test_acc = evaluate_model(moe_model, test_loader, device)
     mode_test_loss, mode_test_acc = evaluate_model(mode_model, test_loader, device)
     
-    print(f"MoE Test Accuracy: {moe_test_acc:.4f}")
+    # print(f"MoE Test Accuracy: {moe_test_acc:.4f}")
     print(f"MoDE Test Accuracy: {mode_test_acc:.4f}")
     
-    # Visualize performance comparison
-    plot_accuracy(
-        [moe_test_acc], 
-        [mode_test_acc], 
-        labels=['MNIST']
-    )
+    # # Visualize performance comparison
+    # plot_accuracy(
+    #     [moe_test_acc], 
+    #     [mode_test_acc], 
+    #     labels=['MNIST']
+    # )
     
-    # Visualize loss curves
-    print("\nPlotting loss curves...")
-    plot_loss_curves(moe_history)
-    plot_loss_curves(mode_history)
+    # # Visualize loss curves
+    # print("\nPlotting loss curves...")
+    # plot_loss_curves(moe_history)
+    # plot_loss_curves(mode_history)
     
-    # Visualize expert weights
-    print("\nVisualizing expert weights...")
-    # Sample a batch from test data
-    for x_batch, _ in test_loader:
-        x_batch = x_batch.view(x_batch.size(0), -1).to(device)
-        break
+    # # Visualize expert weights
+    # print("\nVisualizing expert weights...")
+    # # Sample a batch from test data
+    # for x_batch, _ in test_loader:
+    #     x_batch = x_batch.view(x_batch.size(0), -1).to(device)
+    #     break
     
-    visualize_expert_weights(moe_model, x_batch)
-    visualize_expert_weights(mode_model, x_batch)
+    # visualize_expert_weights(moe_model, x_batch)
+    # visualize_expert_weights(mode_model, x_batch)
 
 def train_model(model, train_loader, val_loader, device, epochs=5, lr=0.001):
     """Model training function"""

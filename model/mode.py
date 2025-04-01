@@ -68,24 +68,30 @@ class MoDE(nn.Module):
         
         # When the number of experts is 3 or more: Use KL divergence
         else:
+            # Calculate average gating weights for normalization
+            avg_gates = torch.mean(gates, dim=0)
+            
             # Calculate KL divergence for each pair of experts
             for i in range(num_experts):
                 for j in range(num_experts):
                     if i != j:  # Only between different experts
                         # Generate soft targets (convert logits to softmax probabilities)
-                        soft_target = F.softmax(expert_outputs[j] / self.distillation_temp, dim=1)
+                        with torch.no_grad():
+                            soft_target = F.softmax(expert_outputs[j] / self.distillation_temp, dim=1)
+                        
                         # Student model's log softmax
                         log_pred = F.log_softmax(expert_outputs[i] / self.distillation_temp, dim=1)
                         
                         # Calculate KL divergence (between soft targets and predictions)
                         kl_div = F.kl_div(log_pred, soft_target, reduction='batchmean')
                         
-                        # Apply gating weights to KL divergence
-                        weighted_kl = kl_div * gates[:, i].mean() * gates[:, j].mean()
+                        # Apply normalized gating weights
+                        weighted_kl = kl_div * (avg_gates[i] * avg_gates[j])
                         distillation_loss += weighted_kl
             
-            # Normalize by the number of expert pairs
-            return distillation_loss / (num_experts * (num_experts - 1))
+            # Normalize by the number of expert pairs and temperature squared
+            num_pairs = num_experts * (num_experts - 1)
+            return distillation_loss / num_pairs
     
     def train_step(self, x, y):
         """Single training step (including knowledge distillation)"""

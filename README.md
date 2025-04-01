@@ -90,37 +90,49 @@ class MoDE(nn.Module):
     
     def compute_distillation_loss(self, expert_outputs, gates):
         """Compute mutual distillation loss among experts"""
+        num_experts = len(expert_outputs)
         distillation_loss = 0
         
-        if self.training and self.alpha > 0:
-            # Get the number of experts
-            num_experts = len(self.moe.experts)
+        # When the number of experts is 2: Use Mean Squared Error (MSE)
+        if num_experts == 2:
+            # Calculate MSE between outputs of the first and second experts
+            # Apply softmax temperature
+            softmax_output1 = F.softmax(expert_outputs[0] / self.distillation_temp, dim=1)
+            softmax_output2 = F.softmax(expert_outputs[1] / self.distillation_temp, dim=1)
             
-            # Compute distillation loss for each expert pair
+            # Calculate Mean Squared Error
+            mse = F.mse_loss(softmax_output1, softmax_output2)
+            
+            # Apply gating weights
+            weighted_mse = mse * gates[:, 0].mean() * gates[:, 1].mean()
+            return weighted_mse
+        
+        # When the number of experts is 3 or more: Use KL divergence
+        else:
+            # Calculate average gating weights for normalization
+            avg_gates = torch.mean(gates, dim=0)
+            
+            # Calculate KL divergence for each pair of experts
             for i in range(num_experts):
                 for j in range(num_experts):
-                    if i != j:
-                        # Get soft targets from expert j
+                    if i != j:  # Only between different experts
+                        # Generate soft targets (convert logits to softmax probabilities)
                         with torch.no_grad():
-                            soft_targets = F.softmax(expert_outputs[j] / self.distillation_temp, dim=1)
-                            
-                        # Get log probabilities from expert i
-                        log_probs = F.log_softmax(expert_outputs[i] / self.distillation_temp, dim=1)
+                            soft_target = F.softmax(expert_outputs[j] / self.distillation_temp, dim=1)
                         
-                        # Compute KL divergence
-                        kl_div = F.kl_div(log_probs, soft_targets, reduction='batchmean')
+                        # Student model's log softmax
+                        log_pred = F.log_softmax(expert_outputs[i] / self.distillation_temp, dim=1)
                         
-                        # Weight by the average gate value for expert i
-                        avg_gate = gates[:, i].mean()
-                        distillation_loss += kl_div * avg_gate
+                        # Calculate KL divergence (between soft targets and predictions)
+                        kl_div = F.kl_div(log_pred, soft_target, reduction='batchmean')
                         
-            # Normalize by the number of expert pairs
-            distillation_loss /= num_experts * (num_experts - 1)
+                        # Apply normalized gating weights
+                        weighted_kl = kl_div * (avg_gates[i] * avg_gates[j])
+                        distillation_loss += weighted_kl
             
-            # Scale by temperature squared (as in original KD paper)
-            distillation_loss *= (self.distillation_temp ** 2)
-        
-        return distillation_loss
+            # Normalize by the number of expert pairs and temperature squared
+            num_pairs = num_experts * (num_experts - 1)
+            return distillation_loss / num_pairs
     
     def train_step(self, x, y):
         """Single training step with distillation"""

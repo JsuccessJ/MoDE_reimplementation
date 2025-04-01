@@ -7,85 +7,105 @@ from .moe import MoE, Expert, GatingNetwork
 
 class MoDE(nn.Module):
     """
-    Mixture of Distilled Experts (MoDE) 모델
-    MoE를 기반으로 상호 지식 증류(mutual knowledge distillation)를 적용한 모델
+    Mixture of Distilled Experts (MoDE) model
+    A model that applies mutual knowledge distillation based on MoE
     """
     def __init__(self, num_experts, input_dim, hidden_dim, output_dim, 
                  sparse_gate=False, top_k=None, distillation_temp=2.0, alpha=0.5):
         super(MoDE, self).__init__()
         
-        # 기본 MoE 모델 생성
+        # Create base MoE model
         self.moe = MoE(num_experts, input_dim, hidden_dim, output_dim, sparse_gate, top_k)
         
-        # 지식 증류를 위한 하이퍼파라미터
-        self.distillation_temp = distillation_temp  # 증류 온도
-        self.alpha = alpha  # 지식 증류와 일반 손실 사이의 가중치 조절 파라미터
+        # Hyperparameters for knowledge distillation
+        self.distillation_temp = distillation_temp  # Distillation temperature
+        self.alpha = alpha  # Parameter to adjust the weight between regular loss and distillation loss
         
-        # 손실 함수 및 최적화기
+        # Loss function and optimizer
         self.loss_fn = nn.CrossEntropyLoss()
         self.optimizer = None
         
     def forward(self, x):
-        """순방향 전파"""
+        """Forward propagation"""
         return self.moe(x)
     
     def get_expert_outputs(self, x):
-        """각 전문가 모델의 출력을 개별적으로 계산"""
+        """Calculate outputs of each expert model individually"""
         expert_outputs = []
         for expert in self.moe.experts:
             expert_outputs.append(expert(x))
         return expert_outputs
         
     def configure_optimizer(self, lr=0.001):
-        """최적화 알고리즘 설정"""
+        """Configure optimization algorithm"""
         self.optimizer = optim.Adam(self.parameters(), lr=lr)
         
     def compute_distillation_loss(self, expert_outputs, gates):
         """
-        전문가 간 지식 증류를 위한 손실 계산
-        각 전문가는 다른 전문가의 출력에서 배우게 됨
+        Calculate distillation loss between experts
+        Each expert learns from the outputs of other experts
+        
+        According to the paper:
+        - Use Mean Squared Error (MSE) when the number of experts is 2
+        - Use KL divergence when the number of experts is 3 or more
         """
-        distillation_loss = 0
         num_experts = len(expert_outputs)
+        distillation_loss = 0
         
-        # 각 전문가 쌍에 대한 KL 발산 계산
-        for i in range(num_experts):
-            for j in range(num_experts):
-                if i != j:  # 다른 전문가끼리만
-                    # 소프트 타깃 생성 (로짓을 소프트맥스 확률로 변환)
-                    soft_target = F.softmax(expert_outputs[j] / self.distillation_temp, dim=1)
-                    # 학생 모델의 로그 소프트맥스
-                    log_pred = F.log_softmax(expert_outputs[i] / self.distillation_temp, dim=1)
-                    
-                    # KL 발산 계산 (소프트 타깃과 예측 사이)
-                    kl_div = F.kl_div(log_pred, soft_target, reduction='batchmean')
-                    
-                    # 게이팅 가중치에 따라 KL 발산 가중 적용
-                    weighted_kl = kl_div * gates[:, i].mean() * gates[:, j].mean()
-                    distillation_loss += weighted_kl
+        # When the number of experts is 2: Use Mean Squared Error (MSE)
+        if num_experts == 2:
+            # Calculate MSE between outputs of the first and second experts
+            # Apply softmax temperature
+            softmax_output1 = F.softmax(expert_outputs[0] / self.distillation_temp, dim=1)
+            softmax_output2 = F.softmax(expert_outputs[1] / self.distillation_temp, dim=1)
+            
+            # Calculate Mean Squared Error
+            mse = F.mse_loss(softmax_output1, softmax_output2)
+            
+            # Apply gating weights
+            weighted_mse = mse * gates[:, 0].mean() * gates[:, 1].mean()
+            return weighted_mse
         
-        # 전문가 쌍의 수로 정규화
-        return distillation_loss / (num_experts * (num_experts - 1))
+        # When the number of experts is 3 or more: Use KL divergence
+        else:
+            # Calculate KL divergence for each pair of experts
+            for i in range(num_experts):
+                for j in range(num_experts):
+                    if i != j:  # Only between different experts
+                        # Generate soft targets (convert logits to softmax probabilities)
+                        soft_target = F.softmax(expert_outputs[j] / self.distillation_temp, dim=1)
+                        # Student model's log softmax
+                        log_pred = F.log_softmax(expert_outputs[i] / self.distillation_temp, dim=1)
+                        
+                        # Calculate KL divergence (between soft targets and predictions)
+                        kl_div = F.kl_div(log_pred, soft_target, reduction='batchmean')
+                        
+                        # Apply gating weights to KL divergence
+                        weighted_kl = kl_div * gates[:, i].mean() * gates[:, j].mean()
+                        distillation_loss += weighted_kl
+            
+            # Normalize by the number of expert pairs
+            return distillation_loss / (num_experts * (num_experts - 1))
     
     def train_step(self, x, y):
-        """단일 학습 단계 (지식 증류 포함)"""
+        """Single training step (including knowledge distillation)"""
         self.optimizer.zero_grad()
         
-        # 게이팅 값과 전문가 출력 계산
+        # Calculate gating values and expert outputs
         gates = self.moe.get_gate_values(x)
         expert_outputs = self.get_expert_outputs(x)
         
-        # MoE의 최종 출력
+        # Final output of MoE
         moe_output = self.forward(x)
         
-        # 일반 분류 손실
+        # Regular classification loss
         ce_loss = self.loss_fn(moe_output, y)
         
-        # 지식 증류 손실
+        # Knowledge distillation loss
         distillation_loss = self.compute_distillation_loss(expert_outputs, gates)
         
-        # 총 손실 = 일반 손실 + 증류 손실의 가중 합
-        total_loss = (1 - self.alpha) * ce_loss + self.alpha * self.distillation_temp**2 * distillation_loss
+        # Modified to match the paper's formula: L = L_task + αL_KD
+        total_loss = ce_loss + self.alpha * distillation_loss
         
         total_loss.backward()
         self.optimizer.step()
@@ -97,7 +117,7 @@ class MoDE(nn.Module):
         }
     
     def train_model(self, train_loader, val_loader=None, epochs=10, lr=0.001):
-        """전체 모델 학습"""
+        """Train the entire model"""
         if self.optimizer is None:
             self.configure_optimizer(lr)
             
@@ -121,7 +141,7 @@ class MoDE(nn.Module):
                 train_ce_loss += losses['ce_loss']
                 train_dist_loss += losses['distillation_loss']
                 
-            # 에폭당 평균 손실
+            # Average loss per epoch
             avg_train_loss = train_total_loss / len(train_loader)
             avg_ce_loss = train_ce_loss / len(train_loader)
             avg_dist_loss = train_dist_loss / len(train_loader)
@@ -130,7 +150,7 @@ class MoDE(nn.Module):
             history['train_ce_loss'].append(avg_ce_loss)
             history['train_dist_loss'].append(avg_dist_loss)
             
-            # 검증 수행 (있는 경우)
+            # Perform validation (if available)
             if val_loader is not None:
                 val_loss, val_acc = self.evaluate(val_loader)
                 history['val_loss'].append(val_loss)
@@ -145,7 +165,7 @@ class MoDE(nn.Module):
         return history
     
     def evaluate(self, data_loader):
-        """검증 또는 테스트 데이터에 대한 평가"""
+        """Evaluate on validation or test data"""
         self.eval()
         total_loss = 0
         correct = 0
@@ -165,7 +185,7 @@ class MoDE(nn.Module):
         return total_loss / len(data_loader), correct / total
     
     def predict(self, x):
-        """예측 수행"""
+        """Make predictions"""
         self.eval()
         with torch.no_grad():
             outputs = self(x)

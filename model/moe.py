@@ -5,7 +5,7 @@ import torch.optim as optim
 from tqdm import tqdm
 
 class Expert(nn.Module):
-    """전문가 모델을 위한 기본 네트워크"""
+    """Base network for expert models"""
     def __init__(self, input_dim, hidden_dim, output_dim):
         super(Expert, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
@@ -22,7 +22,7 @@ class Expert(nn.Module):
         return x
 
 class GatingNetwork(nn.Module):
-    """각 전문가 모델에 가중치를 할당하는 게이팅 네트워크"""
+    """Gating network that assigns weights to each expert model"""
     def __init__(self, input_dim, num_experts, hidden_dim=64):
         super(GatingNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
@@ -34,7 +34,7 @@ class GatingNetwork(nn.Module):
         return F.softmax(x, dim=1)
 
 class MoE(nn.Module):
-    """Mixture of Experts 모델"""
+    """Mixture of Experts model"""
     def __init__(self, num_experts, input_dim, hidden_dim, output_dim, sparse_gate=False, top_k=None):
         super(MoE, self).__init__()
         
@@ -42,44 +42,44 @@ class MoE(nn.Module):
         self.sparse_gate = sparse_gate
         self.top_k = top_k if top_k is not None else num_experts
         
-        # 전문가 모델들 생성
+        # Create expert models
         self.experts = nn.ModuleList([
             Expert(input_dim, hidden_dim, output_dim) 
             for _ in range(num_experts)
         ])
         
-        # 게이팅 네트워크
+        # Gating network
         self.gate = GatingNetwork(input_dim, num_experts)
         
-        # 최적화를 위한 속성
+        # Attributes for optimization
         self.loss_fn = nn.CrossEntropyLoss()
         self.optimizer = None
         
     def forward(self, x):
-        # 각 전문가에 대한 게이팅 가중치 계산
+        # Calculate gating weights for each expert
         gates = self.gate(x)
         
-        # 스파스 게이팅 적용 (선택적)
+        # Apply sparse gating (optional)
         if self.sparse_gate and self.top_k < self.num_experts:
-            # Top-k 전문가만 선택
+            # Select only top-k experts
             top_k_gates, top_k_indices = torch.topk(gates, self.top_k, dim=1)
-            # 정규화된 가중치 계산
+            # Calculate normalized weights
             top_k_gates = top_k_gates / top_k_gates.sum(dim=1, keepdim=True)
             
-            # 전문가 출력 초기화
+            # Initialize expert outputs
             expert_outputs = torch.zeros(x.size(0), self.experts[0].fc3.out_features, device=x.device)
             
-            # 선택된 전문가의 출력을 가중 합산
+            # Weighted sum of outputs from selected experts
             for i, expert in enumerate(self.experts):
-                # i번째 전문가가 선택된 샘플 찾기
+                # Find samples where i-th expert is selected
                 mask = (top_k_indices == i).any(dim=1)
                 if mask.any():
-                    # 선택된 샘플에 대해서만 전문가 계산
+                    # Calculate expert output only for selected samples
                     expert_output = expert(x[mask])
-                    # 게이팅 가중치 적용
+                    # Apply gating weights
                     expert_outputs[mask] += expert_output * gates[mask, i].unsqueeze(1)
         else:
-            # 모든 전문가의 출력을 가중 합산
+            # Weighted sum of outputs from all experts
             expert_outputs = torch.zeros(x.size(0), self.experts[0].fc3.out_features, device=x.device)
             for i, expert in enumerate(self.experts):
                 expert_output = expert(x)
@@ -88,15 +88,15 @@ class MoE(nn.Module):
         return expert_outputs
     
     def get_gate_values(self, x):
-        """입력에 대한 게이팅 네트워크 값을 반환"""
+        """Return gating network values for input"""
         return self.gate(x)
     
     def configure_optimizer(self, lr=0.001):
-        """최적화 알고리즘 설정"""
+        """Configure optimization algorithm"""
         self.optimizer = optim.Adam(self.parameters(), lr=lr)
         
     def train_step(self, x, y):
-        """단일 학습 단계"""
+        """Single training step"""
         self.optimizer.zero_grad()
         outputs = self(x)
         loss = self.loss_fn(outputs, y)
@@ -105,7 +105,7 @@ class MoE(nn.Module):
         return loss.item()
     
     def train_model(self, train_loader, val_loader=None, epochs=10, lr=0.001):
-        """전체 모델 학습"""
+        """Train the entire model"""
         if self.optimizer is None:
             self.configure_optimizer(lr)
             
@@ -118,11 +118,11 @@ class MoE(nn.Module):
                 batch_loss = self.train_step(x_batch, y_batch)
                 train_loss += batch_loss
                 
-            # 에폭당 평균 손실
+            # Average loss per epoch
             avg_train_loss = train_loss / len(train_loader)
             history['train_loss'].append(avg_train_loss)
             
-            # 검증 수행 (있는 경우)
+            # Perform validation (if available)
             if val_loader is not None:
                 val_loss, val_acc = self.evaluate(val_loader)
                 history['val_loss'].append(val_loss)
@@ -135,7 +135,7 @@ class MoE(nn.Module):
         return history
     
     def evaluate(self, data_loader):
-        """검증 또는 테스트 데이터에 대한 평가"""
+        """Evaluate on validation or test data"""
         self.eval()
         total_loss = 0
         correct = 0
@@ -155,7 +155,7 @@ class MoE(nn.Module):
         return total_loss / len(data_loader), correct / total
     
     def predict(self, x):
-        """예측 수행"""
+        """Make predictions"""
         self.eval()
         with torch.no_grad():
             outputs = self(x)
